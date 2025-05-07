@@ -42,11 +42,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load the model and set it to evaluation mode
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = RiceLeafCNN(num_classes=3).to(device)  # 3 classes as per your dataset
-model.load_state_dict(torch.load('rice_leaf_model.pth', map_location=device))
-model.eval()
+# Set up basic logging
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Load the model and set it to evaluation mode with better error handling
+try:
+    logger.info("Starting model loading process")
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    logger.info(f"Using device: {device}")
+    
+    model = RiceLeafCNN(num_classes=3).to(device)  # 3 classes as per your dataset
+    logger.info("Model instance created")
+    
+    # Check if model file exists
+    import os
+    model_path = 'rice_leaf_model.pth'
+    if not os.path.exists(model_path):
+        logger.error(f"Model file {model_path} not found in {os.getcwd()}")
+        raise FileNotFoundError(f"Model file {model_path} not found")
+    
+    logger.info(f"Loading model weights from {model_path}")
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    logger.info("Model weights loaded successfully")
+    
+    model.eval()
+    logger.info("Model set to evaluation mode")
+except Exception as e:
+    logger.error(f"Error loading model: {str(e)}")
+    # Don't raise here, we'll handle this more gracefully
 
 # Rice leaf detection function
 def is_rice_leaf(image: Image.Image) -> bool:
@@ -194,7 +219,30 @@ async def predict(file: UploadFile = File(...)):
             "status": "error"
         }
 
+# Add a health check endpoint
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "model_loaded": hasattr(app, "model_loaded") and app.model_loaded}
+
+# Create a startup event to indicate when the app is fully loaded
+@app.on_event("startup")
+async def startup_event():
+    try:
+        logger.info("Application starting up")
+        # Set a flag to indicate model is loaded
+        app.model_loaded = True
+        logger.info("Application startup complete")
+    except Exception as e:
+        logger.error(f"Startup error: {str(e)}")
+        app.model_loaded = False
+
 if __name__ == "__main__":
-    # Get PORT from environment variable for Render compatibility
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port) 
+    try:
+        # Get PORT from environment variable for Render compatibility
+        port = int(os.environ.get("PORT", 8000))
+        logger.info(f"Starting server on port {port}")
+        uvicorn.run(app, host="0.0.0.0", port=port)
+    except Exception as e:
+        logger.error(f"Failed to start server: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc()) 
