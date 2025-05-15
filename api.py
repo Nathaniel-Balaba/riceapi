@@ -52,21 +52,16 @@ model = RiceLeafCNN(num_classes=3).to(device)  # 3 classes as per your dataset
 model.load_state_dict(torch.load('rice_leaf_model.pth', map_location=device))
 model.eval()
 
-# Rice leaf detection function
+# Adjustable thresholds for rice leaf detection
+LEAF_RATIO_THRESHOLD = 0.7
+LOCAL_VAR_THRESHOLD = 250
+MEAN_BRIGHTNESS_THRESHOLD = 70
+
 def is_rice_leaf(image: Image.Image) -> bool:
-    """
-    Function to detect if the image contains a rice leaf.
-    Uses color features and texture analysis to make a determination.
-    
-    Args:
-        image: PIL Image to analyze
-        
-    Returns:
-        bool: True if the image likely contains a rice leaf, False otherwise
-    """
     try:
         img_array = np.array(image)
         if img_array.shape[0] < 20 or img_array.shape[1] < 20:
+            print("Rejected: Image too small")
             return False
 
         small_img = image.resize((50, 50))
@@ -87,12 +82,19 @@ def is_rice_leaf(image: Image.Image) -> bool:
 
             print(f"Leaf ratio: {leaf_ratio:.2f}, Local var: {local_var:.2f}, Mean brightness: {mean_brightness:.2f}")
 
-            # Stricter thresholds
-            if leaf_ratio > 0.6 and local_var > 200 and mean_brightness > 60:
+            if (leaf_ratio > LEAF_RATIO_THRESHOLD and
+                local_var > LOCAL_VAR_THRESHOLD and
+                mean_brightness > MEAN_BRIGHTNESS_THRESHOLD):
+                print("Accepted as rice leaf")
                 return True
+            else:
+                print("Rejected: Did not meet thresholds")
+        else:
+            print("Rejected: No valid hue points")
 
         return False
-    except Exception:
+    except Exception as e:
+        print(f"Error in is_rice_leaf: {e}")
         return False
 
 # Define a more robust image transform with better preprocessing
