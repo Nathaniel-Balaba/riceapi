@@ -65,51 +65,34 @@ def is_rice_leaf(image: Image.Image) -> bool:
         bool: True if the image likely contains a rice leaf, False otherwise
     """
     try:
-        # Convert image to numpy array
         img_array = np.array(image)
-        
-        # Check if image is too small or too large (unusual for leaf images)
         if img_array.shape[0] < 20 or img_array.shape[1] < 20:
             return False
-            
-        # Extract dominant colors
-        # Rice leaves are typically green to yellow-brown depending on disease
-        # Resize for faster processing
+
         small_img = image.resize((50, 50))
-        small_array = np.array(small_img)
-        
-        # Calculate average color in the HSV space (better for color analysis)
         hsv_img = small_img.convert('HSV')
         hsv_array = np.array(hsv_img)
-        
-        # Check if dominant hue is in green-yellow range (20-140 in HSV)
-        # This range covers healthy and diseased rice leaves
         hue_channel = hsv_array[:,:,0].flatten()
         saturation_channel = hsv_array[:,:,1].flatten()
-        
-        # Filter out pixels with low saturation (not colorful enough)
         valid_hue_points = hue_channel[saturation_channel > 50]
-        
+
         if len(valid_hue_points) > 0:
-            # Check if a significant portion of the image has leaf-like colors
             leaf_hue_points = ((valid_hue_points >= 20) & (valid_hue_points <= 140)).sum()
             leaf_ratio = leaf_hue_points / len(valid_hue_points)
-            
-            # If more than 30% of the valid colored pixels have leaf-like hues
-            if leaf_ratio > 0.3:
-                # Additional check: texture variance (leaves have texture)
-                gray_img = image.convert('L')
-                gray_array = np.array(gray_img)
-                # Calculate local variance as a simple texture measure
-                local_var = np.var(gray_array)
-                
-                # Leaves typically have some texture variation
-                if local_var > 100:
-                    return True
-        
+
+            gray_img = image.convert('L')
+            gray_array = np.array(gray_img)
+            local_var = np.var(gray_array)
+            mean_brightness = np.mean(gray_array)
+
+            print(f"Leaf ratio: {leaf_ratio:.2f}, Local var: {local_var:.2f}, Mean brightness: {mean_brightness:.2f}")
+
+            # Stricter thresholds
+            if leaf_ratio > 0.6 and local_var > 200 and mean_brightness > 60:
+                return True
+
         return False
     except Exception:
-        # If any error occurs during analysis, be conservative and return False
         return False
 
 # Define a more robust image transform with better preprocessing

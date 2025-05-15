@@ -32,7 +32,7 @@ if (!in_array($file['type'], $allowed_types)) {
 }
 
 // API endpoint (replace with your actual API URL)
-$api_url = 'http://localhost:8000/predict';
+$api_url = 'https://riceapi-4n6n.onrender.com/predict';
 
 // Create cURL request
 $curl = curl_init();
