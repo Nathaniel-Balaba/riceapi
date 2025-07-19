@@ -111,11 +111,11 @@ class_names = ['Bacterial leaf blight', 'Brown spot', 'Leaf smut']
 # Define confidence threshold and bias correction factors
 CONFIDENCE_THRESHOLD = 60.0  # Lowered to allow detection of more diseases
 
-# Much more aggressive bias correction factors to overcome the strong Leaf smut bias
+# More balanced bias correction factors - not too aggressive
 BIAS_CORRECTION = {
-    0: 5.0,   # Boost Bacterial leaf blight predictions extremely
-    1: 6.0,   # Boost Brown spot predictions even more
-    2: 0.05   # Reduce Leaf smut predictions to almost nothing
+    0: 2.0,   # Boost Bacterial leaf blight moderately
+    1: 2.5,   # Boost Brown spot moderately  
+    2: 0.3    # Reduce Leaf smut but not too much
 }
 
 def analyze_image_characteristics(image):
@@ -164,21 +164,22 @@ def get_likely_disease_from_characteristics(characteristics):
     v_mean = characteristics['avg_value']
     h_std = characteristics['hue_variation']
     
-    # Simple heuristics based on typical disease appearances
-    # These are rough estimates and may need adjustment
+    # More refined heuristics based on typical disease appearances
+    # These thresholds are adjusted based on actual disease characteristics
     
-    # Brown spot typically has brown/yellow colors (lower hue, moderate saturation)
-    if h_mean < 30 and s_mean > 50 and v_mean < 150:
+    # Brown spot typically has brown/yellow colors (lower hue, moderate saturation, moderate value)
+    if h_mean < 25 and s_mean > 60 and v_mean < 140 and v_mean > 80:
         return "Brown spot"
     
-    # Bacterial leaf blight typically has yellow/white lesions (higher hue, lower saturation)
-    elif h_mean > 40 and s_mean < 80 and v_mean > 120:
+    # Bacterial leaf blight typically has yellow/white lesions (higher hue, lower saturation, higher value)
+    elif h_mean > 35 and s_mean < 70 and v_mean > 130:
         return "Bacterial leaf blight"
     
     # Leaf smut typically has black spots (very low value, low saturation)
-    elif v_mean < 80 and s_mean < 60:
+    elif v_mean < 70 and s_mean < 50:
         return "Leaf smut"
     
+    # If none of the above, return None (let model decide)
     return None
 
 @app.get("/")
@@ -231,7 +232,12 @@ async def predict(file: UploadFile = File(...)):
             print(f"Likely disease from image analysis: {likely_disease}")
             
             # Check if model is clearly wrong (predicting Leaf smut when image analysis suggests otherwise)
-            if model_prediction == "Leaf smut" and likely_disease and likely_disease != "Leaf smut":
+            # Only override if there's a strong disagreement and image analysis is confident
+            if (model_prediction == "Leaf smut" and 
+                likely_disease and 
+                likely_disease != "Leaf smut" and
+                model_confidence > 80):  # Only override if model is very confident about Leaf smut
+                
                 print(f"⚠️ Model bias detected! Overriding prediction from '{model_prediction}' to '{likely_disease}'")
                 
                 # Override the prediction
@@ -246,6 +252,7 @@ async def predict(file: UploadFile = File(...)):
             else:
                 # Use model prediction but cap confidence
                 confidence = min(model_confidence, 85.0)
+                print(f"Using model prediction: {model_prediction} with confidence: {confidence:.2f}%")
             
             # Create debug info string
             debug_info = f"Raw probabilities:\n"
@@ -278,12 +285,12 @@ async def predict(file: UploadFile = File(...)):
             
             # Additional check: if the highest probability is still too dominant, adjust
             max_prob = corrected_probs.max().item()
-            if max_prob > 0.8:  # If any class has >80% probability
-                print(f"Warning: High confidence detected ({max_prob*100:.2f}%). Applying additional correction.")
+            if max_prob > 0.9:  # Only correct if probability is >90% (was 80%)
+                print(f"Warning: Very high confidence detected ({max_prob*100:.2f}%). Applying additional correction.")
                 # Reduce the highest probability and redistribute
                 second_highest_idx = (corrected_probs == corrected_probs.topk(2)[0][1]).nonzero().item()
-                corrected_probs[predicted.item()] *= 0.7  # Reduce highest by 30%
-                corrected_probs[second_highest_idx] *= 1.5  # Boost second highest
+                corrected_probs[predicted.item()] *= 0.8  # Reduce highest by 20% (was 30%)
+                corrected_probs[second_highest_idx] *= 1.3  # Boost second highest by 30% (was 50%)
                 # Renormalize
                 corrected_probs = corrected_probs / corrected_probs.sum()
                 # Recalculate prediction
