@@ -1,6 +1,10 @@
 <?php
 header('Content-Type: application/json');
 
+// Enable error reporting for debugging
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
 // Check if file was uploaded
 if (!isset($_FILES['image'])) {
     echo json_encode([
@@ -16,7 +20,7 @@ $file = $_FILES['image'];
 if ($file['error'] !== UPLOAD_ERR_OK) {
     echo json_encode([
         'status' => 'error',
-        'error' => 'File upload failed'
+        'error' => 'File upload failed: ' . $file['error']
     ]);
     exit;
 }
@@ -31,7 +35,7 @@ if (!in_array($file['type'], $allowed_types)) {
     exit;
 }
 
-// API endpoint (replace with your actual API URL)
+// API endpoint
 $api_url = 'https://riceapi-4n6n.onrender.com/predict';
 
 // Create cURL request
@@ -50,7 +54,9 @@ curl_setopt_array($curl, [
     CURLOPT_POSTFIELDS => $post_data,
     CURLOPT_HTTPHEADER => [
         'Accept: application/json'
-    ]
+    ],
+    CURLOPT_TIMEOUT => 30, // 30 second timeout
+    CURLOPT_CONNECTTIMEOUT => 10 // 10 second connection timeout
 ]);
 
 // Execute the request
@@ -74,10 +80,21 @@ if ($error) {
 if ($http_code !== 200) {
     echo json_encode([
         'status' => 'error',
-        'error' => 'API returned error code: ' . $http_code
+        'error' => 'API returned error code: ' . $http_code . '. Response: ' . $response
+    ]);
+    exit;
+}
+
+// Try to decode the response to check if it's valid JSON
+$decoded_response = json_decode($response, true);
+if (json_last_error() !== JSON_ERROR_NONE) {
+    echo json_encode([
+        'status' => 'error',
+        'error' => 'Invalid JSON response from API: ' . $response
     ]);
     exit;
 }
 
 // Return the API response
-echo $response; 
+echo $response;
+?> 

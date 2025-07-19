@@ -7,6 +7,7 @@ from PIL import Image
 import io
 import numpy as np
 import uvicorn
+import cv2
 
 # Define the CNN model (same structure as what was used to train the model)
 class RiceLeafCNN(nn.Module):
@@ -63,18 +64,18 @@ def is_rice_leaf(image: Image.Image) -> bool:
         if img_array.shape[0] < 20 or img_array.shape[1] < 20:
             print("Rejected: Image too small")
             return False
-
+            
         small_img = image.resize((50, 50))
         hsv_img = small_img.convert('HSV')
         hsv_array = np.array(hsv_img)
         hue_channel = hsv_array[:,:,0].flatten()
         saturation_channel = hsv_array[:,:,1].flatten()
         valid_hue_points = hue_channel[saturation_channel > 50]
-
+        
         if len(valid_hue_points) > 0:
             leaf_hue_points = ((valid_hue_points >= 20) & (valid_hue_points <= 140)).sum()
             leaf_ratio = leaf_hue_points / len(valid_hue_points)
-
+            
             gray_img = image.convert('L')
             gray_array = np.array(gray_img)
             local_var = np.var(gray_array)
@@ -91,7 +92,7 @@ def is_rice_leaf(image: Image.Image) -> bool:
                 print("Rejected: Did not meet thresholds")
         else:
             print("Rejected: No valid hue points")
-
+        
         return False
     except Exception as e:
         print(f"Error in is_rice_leaf: {e}")
@@ -110,13 +111,75 @@ class_names = ['Bacterial leaf blight', 'Brown spot', 'Leaf smut']
 # Define confidence threshold and bias correction factors
 CONFIDENCE_THRESHOLD = 60.0  # Lowered to allow detection of more diseases
 
-# Bias correction factors to adjust for model bias toward Leaf smut
-# These factors help balance the predictions based on observed bias
+# Much more aggressive bias correction factors to overcome the strong Leaf smut bias
 BIAS_CORRECTION = {
-    0: 1.15,  # Boost Bacterial leaf blight predictions
-    1: 1.20,  # Boost Brown spot predictions even more
-    2: 0.75   # Reduce Leaf smut predictions
+    0: 5.0,   # Boost Bacterial leaf blight predictions extremely
+    1: 6.0,   # Boost Brown spot predictions even more
+    2: 0.05   # Reduce Leaf smut predictions to almost nothing
 }
+
+def analyze_image_characteristics(image):
+    """Analyze image characteristics to help determine the likely disease"""
+    try:
+        # Convert to numpy array
+        img_array = np.array(image)
+        
+        # Convert to HSV for better color analysis
+        hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
+        
+        # Calculate color statistics
+        h_mean = np.mean(hsv[:, :, 0])
+        s_mean = np.mean(hsv[:, :, 1])
+        v_mean = np.mean(hsv[:, :, 2])
+        
+        # Calculate standard deviations
+        h_std = np.std(hsv[:, :, 0])
+        s_std = np.std(hsv[:, :, 1])
+        v_std = np.std(hsv[:, :, 2])
+        
+        # Analyze for disease characteristics
+        characteristics = {
+            'avg_hue': h_mean,
+            'avg_saturation': s_mean,
+            'avg_value': v_mean,
+            'hue_variation': h_std,
+            'saturation_variation': s_std,
+            'value_variation': v_std
+        }
+        
+        print(f"Image characteristics: {characteristics}")
+        return characteristics
+        
+    except Exception as e:
+        print(f"Error analyzing image characteristics: {e}")
+        return None
+
+def get_likely_disease_from_characteristics(characteristics):
+    """Estimate likely disease based on image characteristics"""
+    if not characteristics:
+        return None
+    
+    h_mean = characteristics['avg_hue']
+    s_mean = characteristics['avg_saturation']
+    v_mean = characteristics['avg_value']
+    h_std = characteristics['hue_variation']
+    
+    # Simple heuristics based on typical disease appearances
+    # These are rough estimates and may need adjustment
+    
+    # Brown spot typically has brown/yellow colors (lower hue, moderate saturation)
+    if h_mean < 30 and s_mean > 50 and v_mean < 150:
+        return "Brown spot"
+    
+    # Bacterial leaf blight typically has yellow/white lesions (higher hue, lower saturation)
+    elif h_mean > 40 and s_mean < 80 and v_mean > 120:
+        return "Bacterial leaf blight"
+    
+    # Leaf smut typically has black spots (very low value, low saturation)
+    elif v_mean < 80 and s_mean < 60:
+        return "Leaf smut"
+    
+    return None
 
 @app.get("/")
 async def root():
@@ -151,18 +214,89 @@ async def predict(file: UploadFile = File(...)):
             
             probabilities = torch.nn.functional.softmax(corrected_outputs, dim=1)
             
-            # Get class with highest probability after bias correction
-            _, predicted = torch.max(probabilities, 1)
-            confidence = probabilities[0][predicted.item()].item() * 100
+            # Analyze image characteristics
+            characteristics = analyze_image_characteristics(image)
+            likely_disease = get_likely_disease_from_characteristics(characteristics)
             
             # Get raw probabilities for all classes for debugging
             raw_probs = torch.nn.functional.softmax(outputs, dim=1)[0]
             corrected_probs = probabilities[0]
             
+            # Get the model's prediction
+            _, predicted = torch.max(probabilities, 1)
+            model_prediction = class_names[predicted.item()]
+            model_confidence = probabilities[0][predicted.item()].item() * 100
+            
+            print(f"\nModel prediction: {model_prediction} with confidence: {model_confidence:.2f}%")
+            print(f"Likely disease from image analysis: {likely_disease}")
+            
+            # Check if model is clearly wrong (predicting Leaf smut when image analysis suggests otherwise)
+            if model_prediction == "Leaf smut" and likely_disease and likely_disease != "Leaf smut":
+                print(f"⚠️ Model bias detected! Overriding prediction from '{model_prediction}' to '{likely_disease}'")
+                
+                # Override the prediction
+                if likely_disease == "Brown spot":
+                    predicted = torch.tensor([1])  # Brown spot index
+                elif likely_disease == "Bacterial leaf blight":
+                    predicted = torch.tensor([0])  # Bacterial leaf blight index
+                
+                # Adjust confidence based on image analysis
+                confidence = min(75.0, model_confidence * 0.8)  # Reduce confidence when overriding
+                print(f"Overridden prediction: {class_names[predicted.item()]} with confidence: {confidence:.2f}%")
+            else:
+                # Use model prediction but cap confidence
+                confidence = min(model_confidence, 85.0)
+            
+            # Create debug info string
+            debug_info = f"Raw probabilities:\n"
+            for i, class_name in enumerate(class_names):
+                raw_prob = raw_probs[i].item() * 100
+                debug_info += f"  {class_name}: {raw_prob:.2f}%\n"
+            
+            debug_info += f"\nCorrected probabilities:\n"
+            for i, class_name in enumerate(class_names):
+                corrected_prob = corrected_probs[i].item() * 100
+                debug_info += f"  {class_name}: {corrected_prob:.2f}%\n"
+            
+            if likely_disease:
+                debug_info += f"\nImage analysis suggests: {likely_disease}\n"
+                if model_prediction == "Leaf smut" and likely_disease != "Leaf smut":
+                    debug_info += f"⚠️ Model bias override applied: {model_prediction} → {class_names[predicted.item()]}\n"
+            
             # Print debugging info about the probabilities
             print(f"\nRaw probabilities: {[f'{raw_probs[i].item()*100:.2f}%' for i in range(len(class_names))]}") 
             print(f"Corrected probabilities: {[f'{corrected_probs[i].item()*100:.2f}%' for i in range(len(class_names))]}") 
-            print(f"Predicted class: {class_names[predicted.item()]} with confidence: {confidence:.2f}%\n")
+            print(f"Final prediction: {class_names[predicted.item()]} with confidence: {confidence:.2f}%\n")
+            
+            # Add detailed breakdown for debugging
+            print("Detailed breakdown:")
+            for i, class_name in enumerate(class_names):
+                raw_prob = raw_probs[i].item() * 100
+                corrected_prob = corrected_probs[i].item() * 100
+                print(f"  {class_name}: Raw={raw_prob:.2f}%, Corrected={corrected_prob:.2f}%")
+            print()
+            
+            # Additional check: if the highest probability is still too dominant, adjust
+            max_prob = corrected_probs.max().item()
+            if max_prob > 0.8:  # If any class has >80% probability
+                print(f"Warning: High confidence detected ({max_prob*100:.2f}%). Applying additional correction.")
+                # Reduce the highest probability and redistribute
+                second_highest_idx = (corrected_probs == corrected_probs.topk(2)[0][1]).nonzero().item()
+                corrected_probs[predicted.item()] *= 0.7  # Reduce highest by 30%
+                corrected_probs[second_highest_idx] *= 1.5  # Boost second highest
+                # Renormalize
+                corrected_probs = corrected_probs / corrected_probs.sum()
+                # Recalculate prediction
+                _, predicted = torch.max(corrected_probs, 0)
+                confidence = corrected_probs[predicted.item()].item() * 100
+                confidence = min(confidence, 85.0)  # Cap again
+                print(f"After additional correction: {class_names[predicted.item()]} with confidence: {confidence:.2f}%")
+                
+                # Update debug info with final corrected probabilities
+                debug_info += f"\nFinal corrected probabilities (after high-confidence adjustment):\n"
+                for i, class_name in enumerate(class_names):
+                    final_prob = corrected_probs[i].item() * 100
+                    debug_info += f"  {class_name}: {final_prob:.2f}%\n"
             
             # Check if confidence is above threshold
             if confidence >= CONFIDENCE_THRESHOLD:
@@ -170,12 +304,13 @@ async def predict(file: UploadFile = File(...)):
             else:
                 prediction = "Unknown"
                 confidence = 0.0  # Set confidence to 0 for unknown cases
-
-        return {
-            "disease": prediction,
-            "confidence": f"{confidence:.2f}%",
-            "status": "success"
-        }
+            
+            return {
+                "disease": prediction,
+                "confidence": f"{confidence:.2f}%",
+                "status": "success",
+                "debug_info": debug_info
+            }
 
     except Exception as e:
         return {

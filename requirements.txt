@@ -5,4 +5,6 @@ numpy>=1.21.0
 tqdm>=4.65.0
 fastapi>=0.68.0
 uvicorn>=0.15.0
-python-multipart>=0.0.5 
+python-multipart>=0.0.5
+opencv-python>=4.5.0
+requests>=2.25.0 
